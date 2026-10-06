@@ -1,0 +1,90 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><link rel="manifest" href="manifest.webmanifest">
+<title>Rainbow Room Library V3</title>
+<style>
+body{font-family:system-ui;margin:0;background:#fffdf8;color:#25334a}header{text-align:center;padding:24px;font-size:34px;font-weight:900}
+main{max-width:1000px;margin:auto;padding:16px}.hidden{display:none}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:18px}
+.cover{width:100%;aspect-ratio:3/4;object-fit:cover;border-radius:14px;background:#eee}.book{border:0;background:none;font-weight:800;font-size:17px}
+button{font:inherit;border:0;border-radius:12px;padding:12px 15px;font-weight:800;margin:4px;background:#25334a;color:white}.light{background:#e8ecf5;color:#25334a}.danger{background:#b83b3b}
+.card{background:white;border:1px solid #dde2ec;border-radius:16px;padding:14px;margin:12px 0}.field{display:block;width:100%;padding:12px;margin:7px 0 14px;box-sizing:border-box}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.thumb{width:75px;height:95px;object-fit:cover;border-radius:8px}
+#reader{position:fixed;inset:0;background:#111;z-index:5;display:flex;flex-direction:column}#reader.hidden{display:none}
+#pageImg{flex:1;min-height:0;width:100%;object-fit:contain}.readerbar{background:white;padding:8px;display:flex;justify-content:space-between;align-items:center}
+.page{border-top:1px solid #ddd;padding:12px 0}.page img{width:110px;max-height:140px;object-fit:contain}
+.arrange{display:flex;align-items:center;gap:10px;border:1px solid #ddd;background:white;border-radius:12px;padding:8px;margin:8px}.arrange img{width:50px;height:65px;object-fit:cover}.grow{flex:1}
+.modal{position:fixed;inset:0;background:#0008;z-index:10;display:flex;align-items:center;justify-content:center}.modal.hidden{display:none}.box{background:white;padding:20px;border-radius:16px;width:min(360px,90vw)}
+</style></head><body>
+<header id="logo">🌈 RAINBOW ROOM LIBRARY 🌈</header><main>
+<section id="kid"><div id="library" class="grid"></div></section>
+<section id="teacher" class="hidden"><div class="row"><button id="add">＋ Add Book</button><button id="arrange" class="light">↕ Arrange</button><button id="backup" class="light">⬇ Backup</button><button id="restore" class="light">⬆ Restore</button><button id="kids">🌈 Kid Library</button></div>
+<div class="card"><b>Version 3</b>: Photo Library selection, multi-page import, photo compression, library ordering, backup/restore, and offline app files. Books remain local to this device for now.</div><div id="teacherBooks"></div></section>
+<section id="editor" class="hidden"><button id="back" class="light">← Teacher Mode</button><button id="save">Save Book</button><div class="card">
+<label>Title</label><input id="title" class="field"><label>Cover from Photo Library</label><input id="cover" class="field" type="file" accept="image/*"><div id="coverPrev"></div>
+<label>Select page photos — you can choose several at once</label><input id="pages" class="field" type="file" accept="image/*" multiple><div id="pageEditors"></div><div class="card"><b>Recording:</b> Tap 🎙️ Record, read the page, then tap ⏹ STOP RECORDING. No pop-up will interrupt the microphone.</div></div></section>
+<section id="arranger" class="hidden"><button id="arrBack" class="light">← Teacher Mode</button><button id="arrSave">Save Order</button><h2>Arrange Library</h2><div id="arrList"></div></section>
+</main>
+<div id="reader" class="hidden"><div class="readerbar"><button id="home" class="light">🌈</button><b id="rtitle"></b><button id="replay" class="light">🔊</button></div><img id="pageImg"><div class="readerbar"><button id="prev">⬅️</button><b id="num"></b><button id="next">➡️</button></div></div>
+<div id="pinModal" class="modal hidden"><div class="box"><h2>Teacher Mode</h2><input id="pin" class="field" type="password" inputmode="numeric"><button id="pinGo">Enter</button><button id="pinCancel" class="light">Cancel</button></div></div>
+<input id="restoreFile" class="hidden" type="file" accept=".json,application/json">
+<script>
+const $=s=>document.querySelector(s), DB="RainbowRoomLibraryDB", STORE="books", META="meta";let db,books=[],edit=null,cb=null,cp=0,audio=null,timer,activeRecorder=null,activeStream=null,recordingIndex=null,recordChunks=[];
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2), url=b=>b instanceof Blob?URL.createObjectURL(b):b;
+const rq=r=>new Promise((ok,no)=>{r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)}), st=(n,m="readonly")=>db.transaction(n,m).objectStore(n);
+async function init(){db=await new Promise((ok,no)=>{let r=indexedDB.open(DB,2);r.onupgradeneeded=()=>{let d=r.result;if(!d.objectStoreNames.contains(STORE))d.createObjectStore(STORE,{keyPath:"id"});if(!d.objectStoreNames.contains(META))d.createObjectStore(META,{keyPath:"key"})};r.onsuccess=()=>ok(r.result);r.onerror=()=>no(r.error)});await load()}
+async function order(){return (await rq(st(META).get("order")))?.value||[]} async function setOrder(v){await rq(st(META,"readwrite").put({key:"order",value:v}))}
+async function load(){books=await rq(st(STORE).getAll());let o=await order(),p=new Map(o.map((x,i)=>[x,i]));books.sort((a,b)=>(p.get(a.id)??9999)-(p.get(b.id)??9999));render();renderT()}
+function show(x){["kid","teacher","editor","arranger"].forEach(y=>$("#"+y).classList.toggle("hidden",x!==y))}
+function render(){let d=$("#library");d.innerHTML="";if(!books.length){d.innerHTML="<div class=card>No real books yet. Hold the title for Teacher Mode.</div>";return}books.forEach(b=>{let x=document.createElement("button");x.className="book";x.innerHTML=`<img class=cover src="${url(b.cover)}"><div>${b.title}</div>`;x.onclick=()=>read(b);d.append(x)})}
+function renderT(){let d=$("#teacherBooks");d.innerHTML="";books.forEach(b=>{let x=document.createElement("div");x.className="card row";x.innerHTML=`<img class=thumb src="${url(b.cover)}"><div class=grow><b>${b.title}</b><br>${b.pages.length} pages</div><button class="light e">Edit</button><button class="danger d">Delete</button>`;x.querySelector(".e").onclick=()=>openEdit(b);x.querySelector(".d").onclick=async()=>{if(confirm("Delete this book?")){await rq(st(STORE,"readwrite").delete(b.id));await load()}};d.append(x)})}
+async function compress(f){let bm=await createImageBitmap(f),s=Math.min(1,1600/Math.max(bm.width,bm.height)),c=document.createElement("canvas");c.width=bm.width*s;c.height=bm.height*s;c.getContext("2d").drawImage(bm,0,0,c.width,c.height);return new Promise(ok=>c.toBlob(ok,"image/jpeg",.82))}
+function openEdit(b){edit=b?structuredClone(b):{id:uid(),title:"",cover:null,pages:[],created:Date.now()};show("editor");$("#title").value=edit.title;$("#coverPrev").innerHTML=edit.cover?`<img class=thumb src="${url(edit.cover)}">`:"";renderP()}
+$("#cover").onchange=async e=>{if(e.target.files[0])edit.cover=await compress(e.target.files[0]);$("#coverPrev").innerHTML=`<img class=thumb src="${url(edit.cover)}">`;e.target.value=""}
+$("#pages").onchange=async e=>{for(let f of e.target.files)edit.pages.push({id:uid(),photo:await compress(f),audio:null});renderP();e.target.value=""}
+function renderP(){let d=$("#pageEditors");d.innerHTML="";edit.pages.forEach((p,i)=>{let x=document.createElement("div");x.className="page row";x.innerHTML=`<img src="${url(p.photo)}"><div class=grow><b>Page ${i+1}</b><br>${p.audio?"🎙️ Recording saved":"No recording"}<br><button class="light up">↑</button><button class="light dn">↓</button><button class="rec">${recordingIndex===i?"⏹ STOP RECORDING":(p.audio?"Re-record":"🎙️ Record")}</button>${p.audio?'<button class="light listen">▶ Listen</button>':""}<button class="danger rem">Remove</button></div>`;x.querySelector(".up").onclick=()=>mvP(i,-1);x.querySelector(".dn").onclick=()=>mvP(i,1);x.querySelector(".rem").onclick=()=>{edit.pages.splice(i,1);renderP()};x.querySelector(".rec").onclick=()=>record(i);let l=x.querySelector(".listen");if(l)l.onclick=()=>play(p.audio);d.append(x)})}
+function mvP(i,n){let j=i+n;if(j<0||j>=edit.pages.length)return;[edit.pages[i],edit.pages[j]]=[edit.pages[j],edit.pages[i]];renderP()}
+async function record(i){
+ try{
+  if(recordingIndex===i && activeRecorder){
+   try{activeRecorder.requestData()}catch(e){}
+   activeRecorder.stop(); return;
+  }
+  if(recordingIndex!==null){alert("Finish the recording already in progress first.");return}
+  activeStream=await navigator.mediaDevices.getUserMedia({audio:true});
+  recordChunks=[];
+  activeRecorder=new MediaRecorder(activeStream);
+  activeRecorder.ondataavailable=e=>{if(e.data&&e.data.size>0)recordChunks.push(e.data)};
+  activeRecorder.onstop=()=>{
+   const mime=activeRecorder?.mimeType||recordChunks[0]?.type||"audio/mp4";
+   edit.pages[i].audio=new Blob(recordChunks,{type:mime});
+   if(activeStream)activeStream.getTracks().forEach(t=>t.stop());
+   activeRecorder=null;activeStream=null;recordingIndex=null;recordChunks=[];
+   renderP();
+  };
+  activeRecorder.onerror=()=>{
+   if(activeStream)activeStream.getTracks().forEach(t=>t.stop());
+   activeRecorder=null;activeStream=null;recordingIndex=null;recordChunks=[];
+   renderP();alert("The recording did not save. Please try again.");
+  };
+  recordingIndex=i; activeRecorder.start(1000); renderP();
+ }catch(e){
+  if(activeStream)activeStream.getTracks().forEach(t=>t.stop());
+  activeRecorder=null;activeStream=null;recordingIndex=null;recordChunks=[];
+  renderP();alert("Microphone permission is needed to record.");
+ }
+}
+$("#save").onclick=async()=>{edit.title=$("#title").value.trim();if(!edit.title||!edit.cover||!edit.pages.length)return alert("Add a title, cover, and pages.");await rq(st(STORE,"readwrite").put(edit));let o=await order();if(!o.includes(edit.id)){o.push(edit.id);await setOrder(o)}await load();show("teacher")}
+function read(b){cb=b;cp=0;$("#reader").classList.remove("hidden");$("#rtitle").textContent=b.title;page()} function page(){let p=cb.pages[cp];$("#pageImg").src=url(p.photo);$("#num").textContent=`${cp+1}/${cb.pages.length}`;if(p.audio)play(p.audio)}
+function play(b){if(audio)audio.pause();audio=new Audio(url(b));audio.play().catch(()=>{})}
+$("#prev").onclick=()=>{if(cp>0){cp--;page()}};$("#next").onclick=()=>{if(cp<cb.pages.length-1){cp++;page()}};$("#replay").onclick=()=>play(cb.pages[cp].audio);$("#home").onclick=()=>{$("#reader").classList.add("hidden");if(audio)audio.pause()}
+$("#arrange").onclick=()=>{show("arranger");renderA()};function renderA(){let d=$("#arrList");d.innerHTML="";books.forEach((b,i)=>{let x=document.createElement("div");x.className="arrange";x.innerHTML=`<img src="${url(b.cover)}"><b class=grow>${b.title}</b><button class="light u">↑</button><button class="light n">↓</button>`;x.querySelector(".u").onclick=()=>mvB(i,-1);x.querySelector(".n").onclick=()=>mvB(i,1);d.append(x)})}function mvB(i,n){let j=i+n;if(j<0||j>=books.length)return;[books[i],books[j]]=[books[j],books[i]];renderA()}
+$("#arrSave").onclick=async()=>{await setOrder(books.map(b=>b.id));await load();show("teacher")};$("#arrBack").onclick=()=>show("teacher")
+const b64=b=>new Promise((ok,no)=>{let r=new FileReader;r.onload=()=>ok(r.result);r.onerror=no;r.readAsDataURL(b)}),unb64=async s=>await(await fetch(s)).blob();
+$("#backup").onclick=async()=>{let data={version:3,order:await order(),books:[]};for(let b of books){let n={...b,cover:await b64(b.cover),pages:[]};for(let p of b.pages)n.pages.push({...p,photo:await b64(p.photo),audio:p.audio?await b64(p.audio):null});data.books.push(n)}let a=document.createElement("a");a.href=URL.createObjectURL(new Blob([JSON.stringify(data)],{type:"application/json"}));a.download="rainbow-room-library-backup.json";a.click()}
+$("#restore").onclick=()=>$("#restoreFile").click();$("#restoreFile").onchange=async e=>{try{let d=JSON.parse(await e.target.files[0].text());for(let b of d.books){b.cover=await unb64(b.cover);for(let p of b.pages){p.photo=await unb64(p.photo);p.audio=p.audio?await unb64(p.audio):null}await rq(st(STORE,"readwrite").put(b))}if(d.order)await setOrder(d.order);await load();alert("Library restored.")}catch{alert("That backup could not be restored.")}}
+$("#add").onclick=()=>openEdit();$("#back").onclick=()=>show("teacher");$("#kids").onclick=()=>show("kid");
+function hold(){timer=setTimeout(()=>{$("#pinModal").classList.remove("hidden");$("#pin").focus()},3500)}function stop(){clearTimeout(timer)}
+$("#logo").addEventListener("touchstart",hold,{passive:true});$("#logo").addEventListener("touchend",stop);$("#logo").addEventListener("mousedown",hold);$("#logo").addEventListener("mouseup",stop)
+$("#pinGo").onclick=()=>{if($("#pin").value==="2468"){$("#pinModal").classList.add("hidden");$("#pin").value="";show("teacher")}else alert("Incorrect PIN")};$("#pinCancel").onclick=()=>$("#pinModal").classList.add("hidden")
+if("serviceWorker" in navigator)navigator.serviceWorker.register("./sw.js").catch(()=>{});init();
+</script></body></html>
